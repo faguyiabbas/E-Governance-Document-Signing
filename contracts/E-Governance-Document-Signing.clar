@@ -7,6 +7,7 @@
 (define-constant err-not-authorized (err u105))
 (define-constant err-invalid-status (err u106))
 (define-constant err-document-sealed (err u107))
+(define-constant err-document-expired (err u108))
 
 (define-data-var document-counter uint u0)
 (define-data-var authority-counter uint u0)
@@ -22,6 +23,7 @@
         required-signatures: uint,
         signature-count: uint,
         sealed: bool,
+        expires-at: (optional uint),
     }
 )
 
@@ -123,6 +125,16 @@
     )
 )
 
+(define-private (is-document-expired (document-id uint))
+    (match (map-get? documents { document-id: document-id })
+        document (match (get expires-at document)
+            expiry-height (>= stacks-block-height expiry-height)
+            false
+        )
+        false
+    )
+)
+
 (define-public (authorize-authority
         (authority principal)
         (name (string-ascii 50))
@@ -176,6 +188,7 @@
             required-signatures: required-signatures,
             signature-count: u0,
             sealed: false,
+            expires-at: none,
         })
         (map-set document-access {
             document-id: document-id,
@@ -187,6 +200,37 @@
         (log-document-action document-id "created"
             "Document created successfully"
         )
+        (ok document-id)
+    )
+)
+
+(define-public (create-document-with-expiry
+        (title (string-ascii 100))
+        (hash (buff 32))
+        (required-signatures uint)
+        (expires-at uint)
+    )
+    (let ((document-id (get-next-document-id)))
+        (asserts! (> expires-at stacks-block-height) err-invalid-status)
+        (map-set documents { document-id: document-id } {
+            title: title,
+            hash: hash,
+            creator: tx-sender,
+            created-at: stacks-block-height,
+            status: "pending",
+            required-signatures: required-signatures,
+            signature-count: u0,
+            sealed: false,
+            expires-at: (some expires-at),
+        })
+        (map-set document-access {
+            document-id: document-id,
+            accessor: tx-sender,
+        } {
+            access-level: "full",
+            granted-at: stacks-block-height,
+        })
+        (log-document-action document-id "created" "Document created with expiry")
         (ok document-id)
     )
 )
@@ -227,6 +271,7 @@
             }))
         )
         (asserts! (not (get sealed document)) err-document-sealed)
+        (asserts! (not (is-document-expired document-id)) err-document-expired)
         (asserts! (is-some access) err-not-authorized)
         (asserts!
             (is-none (map-get? document-signers {
@@ -282,6 +327,7 @@
 (define-public (revoke-signature (document-id uint))
     (let ((document (unwrap! (map-get? documents { document-id: document-id }) err-not-found)))
         (asserts! (not (get sealed document)) err-document-sealed)
+        (asserts! (not (is-document-expired document-id)) err-document-expired)
         (asserts!
             (is-some (map-get? document-signers {
                 document-id: document-id,
@@ -376,6 +422,7 @@
         (match document
             doc (and
                 (not (get sealed doc))
+                (not (is-document-expired document-id))
                 (is-some (map-get? document-access {
                     document-id: document-id,
                     accessor: signer,
@@ -397,7 +444,37 @@
             signatures: (get signature-count document),
             required: (get required-signatures document),
             sealed: (get sealed document),
+            expires-at: (get expires-at document),
         })
         err-not-found
+    )
+)
+
+(define-public (extend-document-expiry
+        (document-id uint)
+        (new-expiry uint)
+    )
+    (let ((document (unwrap! (map-get? documents { document-id: document-id }) err-not-found)))
+        (asserts! (is-eq (get creator document) tx-sender) err-not-authorized)
+        (asserts! (not (get sealed document)) err-document-sealed)
+        (asserts! (> new-expiry stacks-block-height) err-invalid-status)
+        (map-set documents { document-id: document-id }
+            (merge document { expires-at: (some new-expiry) })
+        )
+        (log-document-action document-id "expiry-extended"
+            "Document expiry date extended"
+        )
+        (ok true)
+    )
+)
+
+(define-read-only (is-expired (document-id uint))
+    (is-document-expired document-id)
+)
+
+(define-read-only (get-document-expiry (document-id uint))
+    (match (map-get? documents { document-id: document-id })
+        document (get expires-at document)
+        none
     )
 )
