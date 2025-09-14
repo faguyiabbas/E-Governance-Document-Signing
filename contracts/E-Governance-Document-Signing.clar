@@ -86,7 +86,64 @@
     }
 )
 
+(define-map workflow-templates
+    { template-id: uint }
+    {
+        name: (string-ascii 50),
+        document-type: (string-ascii 30),
+        creator: principal,
+        created-at: uint,
+        total-stages: uint,
+        active: bool,
+    }
+)
+
+(define-map template-stages
+    {
+        template-id: uint,
+        stage-number: uint,
+    }
+    {
+        name: (string-ascii 30),
+        required-signers: uint,
+        parallel-signing: bool,
+        auto-advance: bool,
+    }
+)
+
+(define-map template-stage-signers
+    {
+        template-id: uint,
+        stage-number: uint,
+        signer: principal,
+    }
+    { required: bool }
+)
+
+(define-map document-workflows
+    { document-id: uint }
+    {
+        template-id: uint,
+        current-stage: uint,
+        workflow-status: (string-ascii 20),
+        started-at: uint,
+    }
+)
+
+(define-map workflow-stage-progress
+    {
+        document-id: uint,
+        stage-number: uint,
+    }
+    {
+        signatures-count: uint,
+        completed: bool,
+        completed-at: (optional uint),
+    }
+)
+
 (define-data-var history-counter uint u0)
+(define-data-var template-counter uint u0)
 
 (define-private (is-contract-owner)
     (is-eq tx-sender contract-owner)
@@ -103,6 +160,13 @@
     (begin
         (var-set authority-counter (+ (var-get authority-counter) u1))
         (var-get authority-counter)
+    )
+)
+
+(define-private (get-next-template-id)
+    (begin
+        (var-set template-counter (+ (var-get template-counter) u1))
+        (var-get template-counter)
     )
 )
 
@@ -173,6 +237,80 @@
     )
 )
 
+(define-public (create-workflow-template
+        (name (string-ascii 50))
+        (document-type (string-ascii 30))
+        (total-stages uint)
+    )
+    (let ((template-id (get-next-template-id)))
+        (asserts! (is-contract-owner) err-owner-only)
+        (asserts! (> total-stages u0) err-invalid-status)
+        (map-set workflow-templates { template-id: template-id } {
+            name: name,
+            document-type: document-type,
+            creator: tx-sender,
+            created-at: stacks-block-height,
+            total-stages: total-stages,
+            active: true,
+        })
+        (ok template-id)
+    )
+)
+
+(define-public (configure-template-stage
+        (template-id uint)
+        (stage-number uint)
+        (stage-name (string-ascii 30))
+        (required-signers uint)
+        (parallel-signing bool)
+        (auto-advance bool)
+    )
+    (let ((template (unwrap! (map-get? workflow-templates { template-id: template-id })
+            err-not-found
+        )))
+        (asserts! (is-eq (get creator template) tx-sender) err-not-authorized)
+        (asserts! (> stage-number u0) err-invalid-status)
+        (asserts! (<= stage-number (get total-stages template))
+            err-invalid-status
+        )
+        (asserts! (> required-signers u0) err-invalid-status)
+        (map-set template-stages {
+            template-id: template-id,
+            stage-number: stage-number,
+        } {
+            name: stage-name,
+            required-signers: required-signers,
+            parallel-signing: parallel-signing,
+            auto-advance: auto-advance,
+        })
+        (ok true)
+    )
+)
+
+(define-public (assign-stage-signer
+        (template-id uint)
+        (stage-number uint)
+        (signer principal)
+        (required bool)
+    )
+    (let ((template (unwrap! (map-get? workflow-templates { template-id: template-id })
+            err-not-found
+        )))
+        (asserts! (is-eq (get creator template) tx-sender) err-not-authorized)
+        (asserts! (> stage-number u0) err-invalid-status)
+        (asserts! (<= stage-number (get total-stages template))
+            err-invalid-status
+        )
+        (map-set template-stage-signers {
+            template-id: template-id,
+            stage-number: stage-number,
+            signer: signer,
+        } { required: required }
+        )
+        (ok true)
+    )
+)
+
 (define-public (create-document
         (title (string-ascii 100))
         (hash (buff 32))
@@ -231,6 +369,57 @@
             granted-at: stacks-block-height,
         })
         (log-document-action document-id "created" "Document created with expiry")
+        (ok document-id)
+    )
+)
+
+(define-public (create-workflow-document
+        (title (string-ascii 100))
+        (hash (buff 32))
+        (template-id uint)
+    )
+    (let (
+            (document-id (get-next-document-id))
+            (template (unwrap! (map-get? workflow-templates { template-id: template-id })
+                err-not-found
+            ))
+        )
+        (asserts! (get active template) err-invalid-status)
+        (map-set documents { document-id: document-id } {
+            title: title,
+            hash: hash,
+            creator: tx-sender,
+            created-at: stacks-block-height,
+            status: "workflow",
+            required-signatures: u0,
+            signature-count: u0,
+            sealed: false,
+            expires-at: none,
+        })
+        (map-set document-workflows { document-id: document-id } {
+            template-id: template-id,
+            current-stage: u1,
+            workflow-status: "active",
+            started-at: stacks-block-height,
+        })
+        (map-set workflow-stage-progress {
+            document-id: document-id,
+            stage-number: u1,
+        } {
+            signatures-count: u0,
+            completed: false,
+            completed-at: none,
+        })
+        (map-set document-access {
+            document-id: document-id,
+            accessor: tx-sender,
+        } {
+            access-level: "full",
+            granted-at: stacks-block-height,
+        })
+        (log-document-action document-id "workflow-started"
+            "Workflow document created"
+        )
         (ok document-id)
     )
 )
@@ -306,6 +495,158 @@
                 "Document signed by authority"
             )
             (ok true)
+        )
+    )
+)
+
+(define-public (sign-workflow-stage
+        (document-id uint)
+        (signature-hash (buff 32))
+        (metadata (string-ascii 200))
+    )
+    (let (
+            (document (unwrap! (map-get? documents { document-id: document-id })
+                err-not-found
+            ))
+            (workflow (unwrap! (map-get? document-workflows { document-id: document-id })
+                err-not-found
+            ))
+            (template (unwrap!
+                (map-get? workflow-templates { template-id: (get template-id workflow) })
+                err-not-found
+            ))
+            (current-stage (get current-stage workflow))
+            (stage-config (unwrap!
+                (map-get? template-stages {
+                    template-id: (get template-id workflow),
+                    stage-number: current-stage,
+                })
+                err-not-found
+            ))
+            (stage-progress (unwrap!
+                (map-get? workflow-stage-progress {
+                    document-id: document-id,
+                    stage-number: current-stage,
+                })
+                err-not-found
+            ))
+            (signer-assignment (map-get? template-stage-signers {
+                template-id: (get template-id workflow),
+                stage-number: current-stage,
+                signer: tx-sender,
+            }))
+        )
+        (asserts! (not (get sealed document)) err-document-sealed)
+        (asserts! (is-eq (get workflow-status workflow) "active")
+            err-invalid-status
+        )
+        (asserts! (not (get completed stage-progress)) err-invalid-status)
+        (asserts! (is-some signer-assignment) err-not-authorized)
+        (asserts!
+            (is-none (map-get? document-signers {
+                document-id: document-id,
+                signer: tx-sender,
+            }))
+            err-already-signed
+        )
+
+        (map-set document-signers {
+            document-id: document-id,
+            signer: tx-sender,
+        } {
+            signed-at: stacks-block-height,
+            signature-hash: signature-hash,
+            metadata: metadata,
+        })
+
+        (let ((new-signatures (+ (get signatures-count stage-progress) u1)))
+            (map-set workflow-stage-progress {
+                document-id: document-id,
+                stage-number: current-stage,
+            }
+                (merge stage-progress {
+                    signatures-count: new-signatures,
+                    completed: (>= new-signatures (get required-signers stage-config)),
+                    completed-at: (if (>= new-signatures (get required-signers stage-config))
+                        (some stacks-block-height)
+                        none
+                    ),
+                })
+            )
+            (log-document-action document-id "workflow-signed"
+                "Stage signed in workflow"
+            )
+            (if (and
+                    (>= new-signatures (get required-signers stage-config))
+                    (get auto-advance stage-config)
+                )
+                (advance-workflow-stage document-id)
+                (ok true)
+            )
+        )
+    )
+)
+
+(define-public (advance-workflow-stage (document-id uint))
+    (let (
+            (document (unwrap! (map-get? documents { document-id: document-id })
+                err-not-found
+            ))
+            (workflow (unwrap! (map-get? document-workflows { document-id: document-id })
+                err-not-found
+            ))
+            (template (unwrap!
+                (map-get? workflow-templates { template-id: (get template-id workflow) })
+                err-not-found
+            ))
+            (current-stage (get current-stage workflow))
+            (stage-progress (unwrap!
+                (map-get? workflow-stage-progress {
+                    document-id: document-id,
+                    stage-number: current-stage,
+                })
+                err-not-found
+            ))
+        )
+        (asserts!
+            (or (is-eq (get creator document) tx-sender) (is-contract-owner))
+            err-not-authorized
+        )
+        (asserts! (is-eq (get workflow-status workflow) "active")
+            err-invalid-status
+        )
+        (asserts! (get completed stage-progress) err-invalid-status)
+
+        (if (< current-stage (get total-stages template))
+            (let ((next-stage (+ current-stage u1)))
+                (map-set document-workflows { document-id: document-id }
+                    (merge workflow { current-stage: next-stage })
+                )
+                (map-set workflow-stage-progress {
+                    document-id: document-id,
+                    stage-number: next-stage,
+                } {
+                    signatures-count: u0,
+                    completed: false,
+                    completed-at: none,
+                })
+                (log-document-action document-id "stage-advanced"
+                    "Workflow advanced to next stage"
+                )
+                (ok true)
+            )
+            (begin
+                (map-set document-workflows { document-id: document-id }
+                    (merge workflow { workflow-status: "completed" })
+                )
+                (map-set documents { document-id: document-id }
+                    (merge document { status: "complete" })
+                )
+                (log-document-action document-id "workflow-completed"
+                    "Workflow completed successfully"
+                )
+                (ok true)
+            )
         )
     )
 )
@@ -476,5 +817,61 @@
     (match (map-get? documents { document-id: document-id })
         document (get expires-at document)
         none
+    )
+)
+
+(define-read-only (get-workflow-template (template-id uint))
+    (map-get? workflow-templates { template-id: template-id })
+)
+
+(define-read-only (get-template-stage
+        (template-id uint)
+        (stage-number uint)
+    )
+    (map-get? template-stages {
+        template-id: template-id,
+        stage-number: stage-number,
+    })
+)
+
+(define-read-only (get-document-workflow (document-id uint))
+    (map-get? document-workflows { document-id: document-id })
+)
+
+(define-read-only (get-workflow-stage-progress
+        (document-id uint)
+        (stage-number uint)
+    )
+    (map-get? workflow-stage-progress {
+        document-id: document-id,
+        stage-number: stage-number,
+    })
+)
+
+(define-read-only (is-stage-signer
+        (template-id uint)
+        (stage-number uint)
+        (signer principal)
+    )
+    (is-some (map-get? template-stage-signers {
+        template-id: template-id,
+        stage-number: stage-number,
+        signer: signer,
+    }))
+)
+
+(define-read-only (get-total-templates)
+    (var-get template-counter)
+)
+
+(define-read-only (get-workflow-status (document-id uint))
+    (match (map-get? document-workflows { document-id: document-id })
+        workflow (ok {
+            template-id: (get template-id workflow),
+            current-stage: (get current-stage workflow),
+            status: (get workflow-status workflow),
+            started-at: (get started-at workflow),
+        })
+        err-not-found
     )
 )
