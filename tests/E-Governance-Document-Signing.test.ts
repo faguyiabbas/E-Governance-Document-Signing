@@ -1,5 +1,6 @@
 
 import { describe, expect, it } from "vitest";
+import { Cl } from "@stacks/transactions";
 
 const accounts = simnet.getAccounts();
 const address1 = accounts.get("wallet_1")!;
@@ -15,11 +16,10 @@ describe("E-Governance Document Signing - Notification System", () => {
       const { result } = simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "subscribe",
-        [1],
+        [Cl.uint(1)],
         address1
       );
-      expect(result).toBeOk();
-      expect(result).toBeBool(true);
+      expect(result).toBeOk(Cl.bool(true));
     });
 
     it("checks subscription status correctly", () => {
@@ -27,7 +27,7 @@ describe("E-Governance Document Signing - Notification System", () => {
       simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "subscribe",
-        [2],
+        [Cl.uint(2)],
         address1
       );
 
@@ -35,7 +35,7 @@ describe("E-Governance Document Signing - Notification System", () => {
       const { result } = simnet.callReadOnlyFn(
         "E-Governance-Document-Signing",
         "is-subscribed",
-        [2, address1],
+        [Cl.uint(2), Cl.principal(address1)],
         address1
       );
       expect(result).toBeBool(true);
@@ -46,7 +46,7 @@ describe("E-Governance Document Signing - Notification System", () => {
       simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "subscribe",
-        [3],
+        [Cl.uint(3)],
         address1
       );
 
@@ -54,11 +54,10 @@ describe("E-Governance Document Signing - Notification System", () => {
       const { result } = simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "unsubscribe",
-        [3],
+        [Cl.uint(3)],
         address1
       );
-      expect(result).toBeOk();
-      expect(result).toBeBool(true);
+      expect(result).toBeOk(Cl.bool(true));
     });
 
     it("prevents duplicate subscriptions", () => {
@@ -66,7 +65,7 @@ describe("E-Governance Document Signing - Notification System", () => {
       simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "subscribe",
-        [4],
+        [Cl.uint(4)],
         address1
       );
 
@@ -74,11 +73,10 @@ describe("E-Governance Document Signing - Notification System", () => {
       const { result } = simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "subscribe",
-        [4],
+        [Cl.uint(4)],
         address1
       );
-      expect(result).toBeErr();
-      expect(result).toBeUint(1001); // ERR-ALREADY-SUBSCRIBED
+      expect(result).toBeErr(Cl.uint(1001)); // ERR-ALREADY-SUBSCRIBED
     });
   });
 
@@ -87,26 +85,25 @@ describe("E-Governance Document Signing - Notification System", () => {
       const { result } = simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "set-notification-preferences",
-        [true, false, true, true, 2],
+        [Cl.bool(true), Cl.bool(false), Cl.bool(true), Cl.bool(true), Cl.uint(2)],
         address1
       );
-      expect(result).toBeOk();
-      expect(result).toBeBool(true);
+      expect(result).toBeOk(Cl.bool(true));
     });
 
     it("returns default preferences for users without explicit settings", () => {
       const { result } = simnet.callReadOnlyFn(
         "E-Governance-Document-Signing",
         "get-preferences-or-default",
-        [address2],
+        [Cl.principal(address2)],
         address2
       );
       expect(result).toBeTuple({
-        "email-alerts": true,
-        "status-updates": true,
-        "expiry-warnings": true,
-        "allow-external": false,
-        "min-gap": 0
+        "email-alerts": Cl.bool(true),
+        "status-updates": Cl.bool(true),
+        "expiry-warnings": Cl.bool(true),
+        "allow-external": Cl.bool(false),
+        "min-gap": Cl.uint(0)
       });
     });
   });
@@ -117,7 +114,7 @@ describe("E-Governance Document Signing - Notification System", () => {
       simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "subscribe",
-        [5],
+        [Cl.uint(5)],
         address1
       );
 
@@ -125,22 +122,20 @@ describe("E-Governance Document Signing - Notification System", () => {
       const { result } = simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "send-notification",
-        [address1, 5, 1], // EMAIL type
+        [Cl.principal(address1), Cl.uint(5), Cl.uint(1)], // EMAIL type
         address1
       );
-      expect(result).toBeOk();
-      expect(result).toBeUint(1); // First notification ID
+      expect(result).toBeOk(Cl.uint(1)); // First notification ID
     });
 
     it("prevents sending notifications to unsubscribed users", () => {
       const { result } = simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "send-notification",
-        [address2, 6, 1], // EMAIL type
+        [Cl.principal(address2), Cl.uint(6), Cl.uint(1)], // EMAIL type
         address1
       );
-      expect(result).toBeErr();
-      expect(result).toBeUint(1002); // ERR-NOT-SUBSCRIBED
+      expect(result).toBeErr(Cl.uint(1002)); // ERR-NOT-SUBSCRIBED
     });
 
     it("respects user opt-out preferences", () => {
@@ -148,13 +143,13 @@ describe("E-Governance Document Signing - Notification System", () => {
       simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "subscribe",
-        [7],
+        [Cl.uint(7)],
         address2
       );
       simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "set-notification-preferences",
-        [true, false, true, true, 0], // status-updates disabled
+        [Cl.bool(true), Cl.bool(false), Cl.bool(true), Cl.bool(true), Cl.uint(0)], // status-updates disabled
         address2
       );
 
@@ -162,11 +157,10 @@ describe("E-Governance Document Signing - Notification System", () => {
       const { result } = simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "send-notification",
-        [address2, 7, 2], // STATUS type
+        [Cl.principal(address2), Cl.uint(7), Cl.uint(2)], // STATUS type
         address1
       );
-      expect(result).toBeErr();
-      expect(result).toBeUint(1004); // ERR-OPTED-OUT
+      expect(result).toBeErr(Cl.uint(1004)); // ERR-OPTED-OUT
     });
 
     it("enforces external sender restrictions", () => {
@@ -174,7 +168,7 @@ describe("E-Governance Document Signing - Notification System", () => {
       simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "subscribe",
-        [8],
+        [Cl.uint(8)],
         address2
       );
 
@@ -182,11 +176,10 @@ describe("E-Governance Document Signing - Notification System", () => {
       const { result } = simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "send-notification",
-        [address2, 8, 1], // EMAIL type
+        [Cl.principal(address2), Cl.uint(8), Cl.uint(1)], // EMAIL type
         address1
       );
-      expect(result).toBeErr();
-      expect(result).toBeUint(1401); // ERR-UNAUTHORIZED
+      expect(result).toBeErr(Cl.uint(1401)); // ERR-UNAUTHORIZED
     });
   });
 
@@ -196,13 +189,13 @@ describe("E-Governance Document Signing - Notification System", () => {
       simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "subscribe",
-        [9],
+        [Cl.uint(9)],
         address1
       );
       simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "subscribe",
-        [9],
+        [Cl.uint(9)],
         address2
       );
 
@@ -210,7 +203,7 @@ describe("E-Governance Document Signing - Notification System", () => {
       const { result } = simnet.callReadOnlyFn(
         "E-Governance-Document-Signing",
         "get-subs-count-for-doc",
-        [9],
+        [Cl.uint(9)],
         address1
       );
       expect(result).toBeUint(2);
@@ -221,19 +214,19 @@ describe("E-Governance Document Signing - Notification System", () => {
       simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "subscribe",
-        [10],
+        [Cl.uint(10)],
         address1
       );
       simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "send-notification",
-        [address1, 10, 1], // EMAIL type
+        [Cl.principal(address1), Cl.uint(10), Cl.uint(1)], // EMAIL type
         address1
       );
       simnet.callPublicFn(
         "E-Governance-Document-Signing",
         "send-notification",
-        [address1, 10, 3], // EXPIRY type
+        [Cl.principal(address1), Cl.uint(10), Cl.uint(3)], // EXPIRY type
         address1
       );
 
@@ -241,7 +234,7 @@ describe("E-Governance Document Signing - Notification System", () => {
       const { result } = simnet.callReadOnlyFn(
         "E-Governance-Document-Signing",
         "get-event-count",
-        [10, address1],
+        [Cl.uint(10), Cl.principal(address1)],
         address1
       );
       expect(result).toBeUint(2);
